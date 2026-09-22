@@ -215,7 +215,7 @@ class SerialManager:
         self._serial: Optional[serial.Serial] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._data_queue: "Queue[Tuple[List[float], bool]]" = Queue(maxsize=200)
+        self._data_queue: "Queue[Tuple[List[Optional[float]], bool]]" = Queue(maxsize=200)
         self._connected = False
         self._on_disconnect: Optional[Callable[[], None]] = None
 
@@ -283,7 +283,7 @@ class SerialManager:
         except Empty:
             return None
 
-    def read_data_with_format(self) -> Optional[Tuple[List[float], bool]]:
+    def read_data_with_format(self) -> Optional[Tuple[List[Optional[float]], bool]]:
         """Returns values and whether they came from the PotN firmware format."""
         try:
             return self._data_queue.get_nowait()
@@ -361,7 +361,7 @@ class SerialManager:
     def _parse_line(
         self,
         line: str
-    ) -> Optional[Tuple[List[float], bool]]:
+    ) -> Optional[Tuple[List[Optional[float]], bool]]:
         try:
             if ":" in line:
                 values = [None] * self.num_sensors
@@ -371,10 +371,10 @@ class SerialManager:
                     if 0 <= index < self.num_sensors:
                         values[index] = float(value.strip())
 
-                if any(value is None for value in values):
+                if all(value is None for value in values):
                     return None
 
-                return [float(value) for value in values], True
+                return values, True
 
             parts = line.replace(";", ",").split(",")
 
@@ -422,7 +422,7 @@ class DataProcessor:
 
     def process(
         self,
-        raw_values: List[float],
+        raw_values: List[Optional[float]],
         timestamp: float,
         invert_range: bool = False
     ) -> List[Dict]:
@@ -432,6 +432,9 @@ class DataProcessor:
         self.timestamps.append(timestamp)
 
         for idx, raw in enumerate(raw_values):
+            if raw is None:
+                continue
+
             cfg = self.config.sensors[idx]
 
             value = (
