@@ -136,6 +136,8 @@ class ArduinoMonitor:
         self.root.title("Monitor de Transductores Arduino")
         self.root.geometry("1400x850")
         self.root.minsize(1000, 650)
+        self._detect_sbc_fullscreen()
+        self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
         if platform.system() == "Windows":
             try:
                 self.root.state("zoomed")
@@ -172,46 +174,73 @@ class ArduinoMonitor:
         self.refresh_ports()
         self._poll_serial()
         self._update_plot()
+        self._update_status()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def _detect_sbc_fullscreen(self):
+        model_path = Path("/proc/device-tree/model")
+        if not model_path.exists():
+            return
+        try:
+            model = model_path.read_text(encoding="utf-8", errors="ignore").lower()
+            if any(name in model for name in ("raspberry", "radxa", "rock")):
+                self.root.attributes("-fullscreen", True)
+        except (OSError, tk.TclError):
+            pass
 
     def _build_ui(self):
         style = ttk.Style()
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure("TButton", padding=7, font=("Arial", 10, "bold"))
-        style.configure("Small.TButton", padding=(5, 3), font=("Arial", 9, "bold"))
+        self.font_normal = ("TkDefaultFont", 12)
+        self.font_bold = ("TkDefaultFont", 12, "bold")
+        self.font_large = ("TkDefaultFont", 20, "bold")
+        self.font_small = ("TkDefaultFont", 10)
+        style.configure("TButton", padding=(10, 8), font=self.font_bold)
+        style.configure("Small.TButton", padding=(8, 5), font=self.font_small)
+        style.configure("Connect.TButton", background="#2ecc71", foreground="white")
+        style.configure("Disconnect.TButton", background="#e74c3c", foreground="white")
+        style.configure("Action.TButton", background="#3498db", foreground="white")
+        style.configure("Record.TButton", background="#2ecc71", foreground="white")
+        style.configure("Report.TButton", background="#9b59b6", foreground="white")
 
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)
-        top = ttk.LabelFrame(self.root, text="Control de conexion", padding=8)
-        top.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
-        top.columnconfigure(8, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=0)
 
-        ttk.Label(top, text="Puerto:").grid(row=0, column=0, padx=4)
-        self.port_combo = ttk.Combobox(top, width=14, state="readonly")
-        self.port_combo.grid(row=0, column=1, padx=4)
-        ttk.Button(top, text="Actualizar", command=self.refresh_ports).grid(row=0, column=2, padx=4)
-        self.connect_button = ttk.Button(top, text="Conectar", command=self.toggle_connection)
-        self.connect_button.grid(row=0, column=3, padx=4)
-        self.record_button = ttk.Button(top, text="Iniciar captura", command=self.toggle_recording, state="disabled")
-        self.record_button.grid(row=0, column=4, padx=4)
-        ttk.Button(top, text="Calibracion", command=self.calibration).grid(row=0, column=5, padx=4)
-        ttk.Button(top, text="Guardar CSV", command=self.export_csv).grid(row=0, column=6, padx=4)
-        ttk.Button(top, text="Guardar PDF", command=self.export_pdf).grid(row=0, column=7, padx=4)
+        main = tk.Frame(self.root, bg="#ecf0f1")
+        main.grid(row=0, column=0, sticky="nsew")
+        main.columnconfigure(1, weight=1)
+        main.rowconfigure(1, weight=1)
 
-        body = ttk.Frame(self.root)
-        body.grid(row=1, column=0, sticky="nsew", padx=8)
-        body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        connection = tk.Frame(main, bg="#34495e", height=58)
+        connection.grid(row=0, column=0, columnspan=2, sticky="ew")
+        connection.grid_propagate(False)
+        connection.columnconfigure(4, weight=1)
+        tk.Label(connection, text="Puerto:", font=self.font_normal, fg="white", bg="#34495e").grid(row=0, column=0, padx=(10, 4), pady=8)
+        self.port_combo = ttk.Combobox(connection, width=14, state="readonly", font=self.font_normal)
+        self.port_combo.grid(row=0, column=1, padx=4, pady=8)
+        ttk.Button(connection, text="Actualizar", command=self.refresh_ports, style="Small.TButton").grid(row=0, column=2, padx=4, pady=8)
+        self.connect_button = ttk.Button(connection, text="Conectar", command=self.toggle_connection, style="Connect.TButton")
+        self.connect_button.grid(row=0, column=3, padx=4, pady=8)
 
-        cards = ttk.Frame(body)
-        cards.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        sensor_panel = tk.Frame(main, bg="#ecf0f1", width=440)
+        sensor_panel.grid(row=1, column=0, sticky="ns")
+        sensor_panel.grid_propagate(False)
+        sensor_panel.columnconfigure(0, weight=1)
         for index in range(NUM_SENSORS):
-            cards.columnconfigure(index, weight=1)
-            self._build_sensor_card(cards, index)
+            self._build_sensor_card(sensor_panel, index)
 
-        graph_box = ttk.LabelFrame(body, text="Monitoreo en tiempo real", padding=5)
-        graph_box.grid(row=1, column=0, sticky="nsew")
+        actions = tk.Frame(sensor_panel, bg="#ecf0f1")
+        actions.grid(row=NUM_SENSORS, column=0, sticky="ew", padx=6, pady=8)
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+        ttk.Button(actions, text="Calibracion", command=self.calibration, style="Action.TButton").grid(row=0, column=0, sticky="ew", padx=3)
+        ttk.Button(actions, text="Guardar CSV", command=self.export_csv, style="Report.TButton").grid(row=0, column=1, sticky="ew", padx=3)
+        ttk.Button(actions, text="Guardar PDF", command=self.export_pdf, style="Report.TButton").grid(row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=5)
+
+        graph_box = tk.LabelFrame(main, text="Monitoreo de Transductores", bg="#ffffff", padx=5, pady=5)
+        graph_box.grid(row=1, column=1, sticky="nsew", padx=(6, 8), pady=6)
         graph_box.rowconfigure(0, weight=1)
         graph_box.columnconfigure(0, weight=1)
 
@@ -229,14 +258,34 @@ class ArduinoMonitor:
         self.canvas.draw()
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
-        self.terminal = tk.Text(self.root, height=5, state="disabled", bg="#1a252f", fg="#ecf0f1")
-        self.terminal.grid(row=2, column=0, sticky="ew", padx=8, pady=(5, 8))
+        bottom = tk.Frame(main, bg="#34495e", height=58)
+        bottom.grid(row=2, column=0, columnspan=2, sticky="ew")
+        bottom.grid_propagate(False)
+        bottom.columnconfigure(1, weight=1)
+        self.record_indicator = tk.Label(bottom, text="", font=self.font_bold, fg="#ecf0f1", bg="#34495e")
+        self.record_indicator.grid(row=0, column=0, padx=10, pady=8)
+        self.port_label = tk.Label(bottom, text="Sin conexion", font=self.font_small, fg="#ecf0f1", bg="#34495e")
+        self.port_label.grid(row=0, column=1, sticky="w", padx=8)
+        self.pause_button = ttk.Button(bottom, text="Pausar", command=self.toggle_pause, style="Action.TButton", state="disabled")
+        self.pause_button.grid(row=0, column=2, padx=4, pady=6)
+        self.record_button = ttk.Button(bottom, text="Iniciar captura", command=self.toggle_recording, style="Record.TButton", state="disabled")
+        self.record_button.grid(row=0, column=3, padx=4, pady=6)
+
+        self.status_frame = tk.Frame(self.root, bg="#2c3e50", height=32)
+        self.status_frame.grid(row=1, column=0, sticky="ew")
+        self.status_frame.grid_propagate(False)
+        self.status_connection = tk.Label(self.status_frame, text="● Desconectado", font=self.font_small, fg="#e74c3c", bg="#2c3e50")
+        self.status_connection.pack(side="left", padx=10)
+        self.status_samples = tk.Label(self.status_frame, text="", font=self.font_small, fg="white", bg="#2c3e50")
+        self.status_samples.pack(side="left", padx=10)
+        self.status_minmax = tk.Label(self.status_frame, text="", font=self.font_small, fg="white", bg="#2c3e50")
+        self.status_minmax.pack(side="right", padx=10)
 
     def _build_sensor_card(self, parent, index):
         number = index + 1
         name = f"Pot{number}"
-        card = tk.Frame(parent, bg=COLORS[index], padx=6, pady=6)
-        card.grid(row=0, column=index, sticky="nsew", padx=3)
+        card = tk.Frame(parent, bg=COLORS[index], padx=8, pady=5)
+        card.grid(row=index, column=0, sticky="ew", padx=5, pady=3)
         card.columnconfigure(0, weight=1)
         card.columnconfigure(1, weight=1)
 
@@ -244,7 +293,7 @@ class ArduinoMonitor:
         self.vars[name] = variable
         check = tk.Checkbutton(
             card,
-            text=f"Sensor {number}",
+            text=f"S{number}",
             variable=variable,
             command=lambda sensor=name: self.toggle_sensor(sensor),
             bg=COLORS[index],
@@ -252,12 +301,12 @@ class ArduinoMonitor:
             selectcolor=COLORS[index],
             activebackground=COLORS[index],
             activeforeground="white",
-            font=("Arial", 11, "bold"),
+            font=self.font_large,
         )
-        check.grid(row=0, column=0, sticky="w")
+        check.grid(row=0, column=0, padx=(4, 8), sticky="w")
 
-        label = tk.Label(card, text="---.---- mm", bg=COLORS[index], fg="white", font=("Courier New", 16, "bold"))
-        label.grid(row=0, column=1, sticky="e")
+        label = tk.Label(card, text="---.---", bg=COLORS[index], fg="white", font=self.font_large, anchor="e")
+        label.grid(row=0, column=1, padx=6, sticky="ew")
         self.value_labels[name] = label
 
         tare = ttk.Button(card, text="Poner a 0", style="Small.TButton", command=lambda sensor=name: self.tare(sensor))
@@ -268,7 +317,7 @@ class ArduinoMonitor:
         entry.insert(0, "25.0")
         entry.grid(row=1, column=1, padx=2, pady=4, sticky="ew")
         self.range_entries[name] = entry
-        ttk.Button(card, text="Set rango", style="Small.TButton", command=lambda sensor=name: self.set_range(sensor)).grid(row=2, column=0, columnspan=2, sticky="ew")
+        ttk.Button(card, text="Set", style="Small.TButton", command=lambda sensor=name: self.set_range(sensor)).grid(row=2, column=0, columnspan=2, sticky="ew")
 
     def refresh_ports(self):
         ports = self.serial.ports()
@@ -292,6 +341,9 @@ class ArduinoMonitor:
             return
         self.connect_button.config(text="Desconectar")
         self.record_button.config(state="normal")
+        self.pause_button.config(state="normal")
+        self.port_label.config(text=port)
+        self.status_connection.config(text="● Conectado", fg="#2ecc71")
         self.log(f"Conectado a {port}")
         for number in range(1, NUM_SENSORS + 1):
             name = f"Pot{number}"
@@ -305,7 +357,11 @@ class ArduinoMonitor:
         self.serial.disconnect()
         self.connect_button.config(text="Conectar")
         self.record_button.config(state="disabled", text="Iniciar captura")
+        self.pause_button.config(state="disabled", text="Pausar")
+        self.port_label.config(text="Sin conexion")
+        self.status_connection.config(text="● Desconectado", fg="#e74c3c")
         self.recording = False
+        self.paused = False
         self.log("Desconectado")
 
     def _send_sensor_commands(self, number, enabled):
@@ -396,6 +452,30 @@ class ArduinoMonitor:
         self.axis.autoscale_view()
         self.canvas.draw_idle()
         self.root.after(PLOT_MS, self._update_plot)
+
+    def _update_status(self):
+        samples = sum(len(sensor["all_values"]) for sensor in self.sensors.values())
+        self.status_samples.config(text=f"Muestras: {samples:,}" if samples else "")
+        minimum = None
+        maximum = None
+        for sensor in self.sensors.values():
+            if sensor["enabled"] and sensor["min"] is not None:
+                minimum = sensor["min"] if minimum is None else min(minimum, sensor["min"])
+            if sensor["enabled"] and sensor["max"] is not None:
+                maximum = sensor["max"] if maximum is None else max(maximum, sensor["max"])
+        if minimum is not None and maximum is not None:
+            self.status_minmax.config(text=f"Min: {minimum:.2f}  Max: {maximum:.2f}")
+        else:
+            self.status_minmax.config(text="")
+        if self.recording:
+            self.record_indicator.config(text="● REC", fg="#e74c3c")
+        else:
+            self.record_indicator.config(text="")
+        self.root.after(500, self._update_status)
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        self.pause_button.config(text="Reanudar" if self.paused else "Pausar")
 
     def toggle_recording(self):
         self.recording = not self.recording
