@@ -297,6 +297,12 @@ class SerialManager:
         except Empty:
             return None
 
+    def parse_line(
+        self,
+        line: str
+    ) -> Optional[Tuple[List[Optional[float]], bool]]:
+        return self._parse_line(line)
+
     def send_command(self, command: str) -> bool:
         if not self.is_connected or self._serial is None:
             return False
@@ -2322,42 +2328,31 @@ class MainWindow(ctk.CTk):
 
     def _poll_serial(self) -> None:
 
-        if self.monitoring:
+        processed_data = False
 
-            processed_data = False
-
+        if self.serial.is_connected:
             while True:
-
                 line = self.serial.read_line()
 
                 if line is None:
                     break
 
-                parsed = self.serial._parse_line(line)
+                parsed = self.serial.parse_line(line)
                 if parsed is None:
                     continue
 
-                ts = (
-                    time.time()
-                    - self.start_time
-                )
-
                 raw_values, is_pot_format = parsed
-
                 results = self.processor.process(
                     raw_values,
-                    ts,
+                    time.time() - self.start_time,
                     invert_range=is_pot_format
                 )
 
-                self._apply_results(
-                    results
-                )
-
+                self._apply_results(results)
                 processed_data = True
 
-            if processed_data and not self.graph_paused:
-                self._update_graph()
+        if processed_data and not self.graph_paused:
+            self._update_graph()
 
         self.after(
             REFRESH_MS,
