@@ -30,7 +30,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from queue import Empty, Queue
 from tkinter import filedialog, messagebox
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import customtkinter as ctk
 import pandas as pd
@@ -215,7 +215,7 @@ class SerialManager:
         self._serial: Optional[serial.Serial] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._data_queue: "Queue[List[float]]" = Queue(maxsize=200)
+        self._data_queue: "Queue[Tuple[List[float], bool]]" = Queue(maxsize=200)
         self._connected = False
         self._on_disconnect: Optional[Callable[[], None]] = None
 
@@ -278,9 +278,28 @@ class SerialManager:
 
     def read_data(self) -> Optional[List[float]]:
         try:
+            values, _ = self._data_queue.get_nowait()
+            return values
+        except Empty:
+            return None
+
+    def read_data_with_format(self) -> Optional[Tuple[List[float], bool]]:
+        """Returns values and whether they came from the PotN firmware format."""
+        try:
             return self._data_queue.get_nowait()
         except Empty:
             return None
+
+    def send_command(self, command: str) -> bool:
+        if not self.is_connected or self._serial is None:
+            return False
+
+        try:
+            self._serial.write(f"{command.rstrip(chr(10))}\n".encode("utf-8"))
+            return True
+        except serial.SerialException as exc:
+            print(f"[Serial] Error enviando comando: {exc}")
+            return False
 
     def set_disconnect_callback(
         self,
@@ -307,10 +326,12 @@ class SerialManager:
                 if not line:
                     continue
 
-                values = self._parse_line(line)
+                parsed = self._parse_line(line)
 
-                if values is None:
+                if parsed is None:
                     continue
+
+                values, is_pot_format = parsed
 
                 if self._data_queue.full():
                     try:
@@ -318,7 +339,7 @@ class SerialManager:
                     except Empty:
                         pass
 
-                self._data_queue.put_nowait(values)
+                self._data_queue.put_nowait((values, is_pot_format))
 
             except serial.SerialException as exc:
                 print(f"[Serial] Conexión perdida: {exc}")
@@ -340,19 +361,29 @@ class SerialManager:
     def _parse_line(
         self,
         line: str
-    ) -> Optional[List[float]]:
+    ) -> Optional[Tuple[List[float], bool]]:
         try:
+            if ":" in line:
+                values = [None] * self.num_sensors
+                for part in line.replace("|", ",").split(","):
+                    name, value = part.split(":", 1)
+                    index = int(name.strip().replace("Pot", "")) - 1
+                    if 0 <= index < self.num_sensors:
+                        values[index] = float(value.strip())
+
+                if any(value is None for value in values):
+                    return None
+
+                return [float(value) for value in values], True
+
             parts = line.replace(";", ",").split(",")
 
             if len(parts) < self.num_sensors:
                 return None
 
-            return [
-                float(parts[i])
-                for i in range(self.num_sensors)
-            ]
+            return [float(parts[i]) for i in range(self.num_sensors)], False
 
-        except ValueError:
+        except (ValueError, IndexError):
             return None
 
 
@@ -392,7 +423,8 @@ class DataProcessor:
     def process(
         self,
         raw_values: List[float],
-        timestamp: float
+        timestamp: float,
+        invert_range: bool = False
     ) -> List[Dict]:
 
         results = []
@@ -402,7 +434,11 @@ class DataProcessor:
         for idx, raw in enumerate(raw_values):
             cfg = self.config.sensors[idx]
 
-            value = raw + cfg.offset
+            value = (
+                cfg.max_value - raw
+                if invert_range
+                else raw
+            ) + cfg.offset
             state = self._evaluate_state(value, cfg)
 
             self.history[idx].append(value)
@@ -663,6 +699,7 @@ class SensorCard(ctk.CTkFrame):
         name: str,
         unit: str,
         on_tare: Callable[[int], None],
+        on_toggle: Callable[[int, bool], None],
         theme: Dict[str, str],
         **kwargs
     ):
@@ -677,6 +714,7 @@ class SensorCard(ctk.CTkFrame):
 
         self.index = index
         self._on_tare = on_tare
+        self._on_toggle = on_toggle
         self.theme = theme
 
         self.name_label = ctk.CTkLabel(
@@ -690,6 +728,22 @@ class SensorCard(ctk.CTkFrame):
             pady=(18, 5),
             padx=12
         )
+
+        self.enabled_var = ctk.BooleanVar(value=False)
+
+        self.enabled_check = ctk.CTkCheckBox(
+            self,
+            text="Activo",
+            variable=self.enabled_var,
+            font=("Segoe UI", 13),
+            text_color=theme["text"],
+            command=lambda: self._on_toggle(
+                self.index,
+                bool(self.enabled_var.get())
+            ),
+        )
+
+        self.enabled_check.pack(pady=(0, 8))
 
         self.value_var = ctk.StringVar(
             value="--.--"
@@ -774,6 +828,12 @@ class SensorCard(ctk.CTkFrame):
             text=name.upper()
         )
 
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled_var.set(enabled)
+
+    def is_enabled(self) -> bool:
+        return bool(self.enabled_var.get())
+
     def apply_theme(
         self,
         theme: Dict[str, str]
@@ -791,6 +851,10 @@ class SensorCard(ctk.CTkFrame):
 
         self.unit_label.configure(
             text_color=theme["secondary_text"]
+        )
+
+        self.enabled_check.configure(
+            text_color=theme["text"]
         )
 
         self.tare_button.configure(
@@ -1738,6 +1802,7 @@ class MainWindow(ctk.CTk):
                 name=sensor.name,
                 unit=sensor.unit,
                 on_tare=self._on_tare,
+                on_toggle=self._toggle_sensor,
                 theme=self.theme
             )
 
@@ -2110,6 +2175,10 @@ class MainWindow(ctk.CTk):
                 True
             )
 
+            for index, card in enumerate(self.cards):
+                if card.is_enabled():
+                    self._set_sensor_enabled(index, True)
+
         else:
 
             messagebox.showerror(
@@ -2121,6 +2190,10 @@ class MainWindow(ctk.CTk):
     def _disconnect(self) -> None:
 
         self._stop_monitoring()
+
+        for index, card in enumerate(self.cards):
+            if card.is_enabled():
+                self._set_sensor_enabled(index, False)
 
         self.serial.disconnect()
 
@@ -2183,6 +2256,25 @@ class MainWindow(ctk.CTk):
             state="disabled"
         )
 
+    def _toggle_sensor(self, index: int, enabled: bool) -> None:
+        if not self.serial.is_connected:
+            self.cards[index].set_enabled(False)
+            messagebox.showwarning(
+                "Sensor",
+                "Conecta el controlador antes de activar un sensor."
+            )
+            return
+
+        self._set_sensor_enabled(index, enabled)
+
+    def _set_sensor_enabled(self, index: int, enabled: bool) -> None:
+        sensor_number = index + 1
+        command = "E" if enabled else "D"
+        light_command = "LON" if enabled else "LOFF"
+
+        self.serial.send_command(f"{command}{sensor_number}")
+        self.serial.send_command(f"{light_command}{sensor_number}")
+
     # =========================================================
     # MONITOREO
     # =========================================================
@@ -2231,7 +2323,7 @@ class MainWindow(ctk.CTk):
 
             while True:
 
-                data = self.serial.read_data()
+                data = self.serial.read_data_with_format()
 
                 if data is None:
                     break
@@ -2245,9 +2337,12 @@ class MainWindow(ctk.CTk):
                     - self.start_time
                 )
 
+                raw_values, is_pot_format = latest
+
                 results = self.processor.process(
-                    latest,
-                    ts
+                    raw_values,
+                    ts,
+                    invert_range=is_pot_format
                 )
 
                 self._apply_results(
