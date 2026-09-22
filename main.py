@@ -152,7 +152,7 @@ class SensorConfig:
     name: str
     unit: str = "mm"
     min_value: float = 0.0
-    max_value: float = 50.0
+    max_value: float = 25.0
     warning_margin: float = 0.10
     offset: float = 0.0
 
@@ -239,8 +239,7 @@ class SerialManager:
                 timeout=1
             )
 
-            time.sleep(0.5)
-            self._serial.reset_input_buffer()
+            time.sleep(2.0)
 
             self._connected = True
             self._stop_event.clear()
