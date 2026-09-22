@@ -13,6 +13,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
+import customtkinter as ctk
 import serial
 import serial.tools.list_ports
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -134,9 +135,11 @@ class ArduinoMonitor:
     def __init__(self, root):
         self.root = root
         self.root.title("Monitor de Transductores Arduino")
-        self.root.geometry("1400x850")
-        self.root.minsize(1000, 650)
+        self.root.geometry("1360x820")
+        self.root.minsize(1120, 720)
+        self.root.attributes("-fullscreen", True)
         self._detect_sbc_fullscreen()
+        self.root.bind("<F11>", lambda _event: self.root.attributes("-fullscreen", not self.root.attributes("-fullscreen")))
         self.root.bind("<Escape>", lambda _event: self.root.attributes("-fullscreen", False))
         if platform.system() == "Windows":
             try:
@@ -170,7 +173,7 @@ class ArduinoMonitor:
         self.range_entries = {}
         self.lines = {}
 
-        self._build_ui()
+        self._build_custom_ui()
         self.refresh_ports()
         self._poll_serial()
         self._update_plot()
@@ -187,6 +190,143 @@ class ArduinoMonitor:
                 self.root.attributes("-fullscreen", True)
         except (OSError, tk.TclError):
             pass
+
+    def _build_custom_ui(self):
+        ctk.set_appearance_mode("light")
+        ctk.set_default_color_theme("blue")
+        ctk.set_widget_scaling(1.15)
+
+        self.root.configure(fg_color="#f2f4f7")
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(1, weight=1)
+
+        self.toolbar = ctk.CTkFrame(self.root, fg_color="#ffffff", corner_radius=0, height=78)
+        self.toolbar.grid(row=0, column=0, sticky="ew")
+        self.toolbar.grid_propagate(False)
+
+        ctk.CTkLabel(
+            self.toolbar,
+            text="Monitor de Transductores Arduino",
+            font=("Segoe UI", 20, "bold"),
+            text_color="#1f2937",
+        ).pack(side="left", padx=24)
+
+        self.connect_button = ctk.CTkButton(
+            self.toolbar,
+            text="🔌 Conectar",
+            width=155,
+            height=42,
+            fg_color="#2f6fad",
+            hover_color="#3f82c1",
+            font=("Segoe UI", 14, "bold"),
+            command=self.toggle_connection,
+        )
+        self.connect_button.pack(side="right", padx=24)
+
+        ctk.CTkLabel(
+            self.toolbar,
+            text="Puerto COM:",
+            font=("Segoe UI", 14),
+            text_color="#1f2937",
+        ).pack(side="right", padx=(8, 0))
+
+        self.port_combo = ctk.CTkOptionMenu(
+            self.toolbar,
+            values=["--"],
+            width=160,
+            height=40,
+            font=("Segoe UI", 13),
+        )
+        self.port_combo.pack(side="right", padx=7)
+        ctk.CTkButton(
+            self.toolbar,
+            text="↻",
+            width=44,
+            height=40,
+            fg_color="#dce3eb",
+            hover_color="#cbd5df",
+            text_color="#1f2937",
+            font=("Segoe UI", 20),
+            command=self.refresh_ports,
+        ).pack(side="right", padx=4)
+
+        content = ctk.CTkFrame(self.root, fg_color="transparent")
+        content.grid(row=1, column=0, sticky="nsew", padx=22, pady=(16, 8))
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(1, weight=1)
+
+        cards = ctk.CTkFrame(content, fg_color="transparent")
+        cards.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        for index in range(NUM_SENSORS):
+            cards.grid_columnconfigure(index, weight=1)
+            self._build_custom_sensor_card(cards, index)
+
+        graph = ctk.CTkFrame(content, fg_color="#ffffff", corner_radius=14)
+        graph.grid(row=1, column=0, sticky="nsew")
+        graph.columnconfigure(0, weight=1)
+        graph.rowconfigure(1, weight=1)
+
+        title_bar = ctk.CTkFrame(graph, fg_color="transparent")
+        title_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 0))
+        ctk.CTkLabel(title_bar, text="📈 MONITOREO EN TIEMPO REAL", font=("Segoe UI", 17, "bold"), text_color="#1f2937").pack(side="left")
+        self.pause_button = ctk.CTkButton(title_bar, text="⏸ Pausar", width=120, height=34, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.toggle_pause)
+        self.pause_button.pack(side="right", padx=4)
+        ctk.CTkButton(title_bar, text="🧹 Limpiar", width=120, height=34, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.clear_data).pack(side="right", padx=4)
+
+        self.figure = Figure(figsize=(12, 4), dpi=100)
+        self.axis = self.figure.add_subplot(111)
+        self.axis.set_xlabel("Tiempo (s)")
+        self.axis.set_ylabel("Valor (mm)")
+        self.axis.grid(True, alpha=0.35, linestyle="--")
+        self.axis.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
+        for index in range(1, NUM_SENSORS + 1):
+            line, = self.axis.plot([], [], color=COLORS[index - 1], linewidth=2.2, label=f"Sensor {index}")
+            self.lines[f"Pot{index}"] = line
+        self.axis.legend(loc="upper left", ncol=NUM_SENSORS, fontsize=9)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=graph)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=12, pady=(4, 12))
+
+        self.footer = ctk.CTkFrame(self.root, fg_color="#ffffff", corner_radius=0, height=78)
+        self.footer.grid(row=2, column=0, sticky="ew")
+        self.footer.grid_propagate(False)
+        self.record_indicator = ctk.CTkLabel(self.footer, text="", font=("Segoe UI", 14, "bold"), text_color="#e74c3c")
+        self.record_indicator.pack(side="left", padx=18)
+        self.port_label = ctk.CTkLabel(self.footer, text="Sin conexión", font=("Segoe UI", 12), text_color="#5b6470")
+        self.port_label.pack(side="left", padx=8)
+        ctk.CTkButton(self.footer, text="🎯 Calibrar", width=160, height=44, fg_color="#8e44ad", hover_color="#9b59b6", command=self.calibration).pack(side="right", padx=7, pady=15)
+        ctk.CTkButton(self.footer, text="📄 PDF", width=140, height=44, fg_color="#16a085", hover_color="#1abc9c", command=self.export_pdf).pack(side="right", padx=7, pady=15)
+        ctk.CTkButton(self.footer, text="💾 CSV", width=140, height=44, fg_color="#2f6fad", hover_color="#3f82c1", command=self.export_csv).pack(side="right", padx=7, pady=15)
+        self.record_button = ctk.CTkButton(self.footer, text="▶ Iniciar captura", width=180, height=44, fg_color="#27ae60", hover_color="#2ecc71", command=self.toggle_recording, state="disabled")
+        self.record_button.pack(side="right", padx=7, pady=15)
+
+        self.status_connection = ctk.CTkLabel(self.root, text="● Desconectado", height=28, fg_color="#2c3e50", text_color="#e74c3c", anchor="w")
+        self.status_connection.grid(row=3, column=0, sticky="ew")
+
+    def _build_custom_sensor_card(self, parent, index):
+        number = index + 1
+        name = f"Pot{number}"
+        color = COLORS[index]
+        card = ctk.CTkFrame(parent, fg_color="#ffffff", border_width=2, border_color=color, corner_radius=12)
+        card.grid(row=0, column=index, sticky="nsew", padx=6)
+        card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(card, text=f"SENSOR {number}", font=("Segoe UI", 15, "bold"), text_color=color).pack(pady=(12, 4))
+        variable = tk.BooleanVar(value=False)
+        self.vars[name] = variable
+        ctk.CTkCheckBox(card, text="Activo", variable=variable, font=("Segoe UI", 12), command=lambda sensor=name: self.toggle_sensor(sensor)).pack(pady=(0, 6))
+        label = ctk.CTkLabel(card, text="---.---- mm", font=("Courier New", 25, "bold"), text_color="#1f2937")
+        label.pack(pady=2)
+        self.value_labels[name] = label
+        ctk.CTkButton(card, text="Poner a 0", width=115, height=30, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=lambda sensor=name: self.tare(sensor)).pack(pady=(4, 8))
+        self.tare_buttons[name] = card.winfo_children()[-1]
+        range_row = ctk.CTkFrame(card, fg_color="transparent")
+        range_row.pack(fill="x", padx=8, pady=(0, 10))
+        range_row.columnconfigure(0, weight=1)
+        entry = ctk.CTkEntry(range_row, width=70, justify="center")
+        entry.insert(0, "25.0")
+        entry.grid(row=0, column=0, padx=2)
+        self.range_entries[name] = entry
+        ctk.CTkButton(range_row, text="Set", width=50, height=28, command=lambda sensor=name: self.set_range(sensor)).grid(row=0, column=1, padx=2)
 
     def _build_ui(self):
         style = ttk.Style()
@@ -321,9 +461,9 @@ class ArduinoMonitor:
 
     def refresh_ports(self):
         ports = self.serial.ports()
-        self.port_combo["values"] = ports or ["--"]
-        if ports:
-            self.port_combo.current(0)
+        values = ports or ["--"]
+        self.port_combo.configure(values=values)
+        self.port_combo.set(values[0])
 
     def toggle_connection(self):
         if self.serial.connected:
@@ -339,11 +479,11 @@ class ArduinoMonitor:
         if not self.serial.connect(port):
             messagebox.showerror("Conexion", f"No se pudo abrir {port}.")
             return
-        self.connect_button.config(text="Desconectar")
-        self.record_button.config(state="normal")
-        self.pause_button.config(state="normal")
-        self.port_label.config(text=port)
-        self.status_connection.config(text="● Conectado", fg="#2ecc71")
+        self.connect_button.configure(text="🔌 Desconectar", fg_color="#c0392b", hover_color="#e74c3c")
+        self.record_button.configure(state="normal")
+        self.pause_button.configure(state="normal")
+        self.port_label.configure(text=port)
+        self.status_connection.configure(text="● Conectado", text_color="#2ecc71")
         self.log(f"Conectado a {port}")
         for number in range(1, NUM_SENSORS + 1):
             name = f"Pot{number}"
@@ -355,11 +495,11 @@ class ArduinoMonitor:
             if self.sensors[f"Pot{number}"]["enabled"]:
                 self._send_sensor_commands(number, False)
         self.serial.disconnect()
-        self.connect_button.config(text="Conectar")
-        self.record_button.config(state="disabled", text="Iniciar captura")
-        self.pause_button.config(state="disabled", text="Pausar")
-        self.port_label.config(text="Sin conexion")
-        self.status_connection.config(text="● Desconectado", fg="#e74c3c")
+        self.connect_button.configure(text="🔌 Conectar", fg_color="#2f6fad", hover_color="#3f82c1")
+        self.record_button.configure(state="disabled", text="▶ Iniciar captura")
+        self.pause_button.configure(state="disabled", text="⏸ Pausar")
+        self.port_label.configure(text="Sin conexión")
+        self.status_connection.configure(text="● Desconectado", text_color="#e74c3c")
         self.recording = False
         self.paused = False
         self.log("Desconectado")
@@ -413,7 +553,7 @@ class ArduinoMonitor:
             now = time.time() - self.start_time
             sensor["values"].append(value)
             sensor["times"].append(now)
-            self.value_labels[name].config(text=f"{value:.4f} mm")
+            self.value_labels[name].configure(text=f"{value:.4f} mm")
             if self.recording:
                 sensor["all_values"].append(value)
                 sensor["all_times"].append(now)
@@ -455,7 +595,7 @@ class ArduinoMonitor:
 
     def _update_status(self):
         samples = sum(len(sensor["all_values"]) for sensor in self.sensors.values())
-        self.status_samples.config(text=f"Muestras: {samples:,}" if samples else "")
+        self.status_connection.configure(text=(f"● Conectado  |  Muestras: {samples:,}" if self.serial.connected and samples else ("● Conectado" if self.serial.connected else "● Desconectado")))
         minimum = None
         maximum = None
         for sensor in self.sensors.values():
@@ -464,18 +604,28 @@ class ArduinoMonitor:
             if sensor["enabled"] and sensor["max"] is not None:
                 maximum = sensor["max"] if maximum is None else max(maximum, sensor["max"])
         if minimum is not None and maximum is not None:
-            self.status_minmax.config(text=f"Min: {minimum:.2f}  Max: {maximum:.2f}")
+            self.port_label.configure(text=f"Min: {minimum:.2f}  Max: {maximum:.2f}")
         else:
-            self.status_minmax.config(text="")
+            self.port_label.configure(text="Sin conexión" if not self.serial.connected else self.port_combo.get())
         if self.recording:
-            self.record_indicator.config(text="● REC", fg="#e74c3c")
+            self.record_indicator.configure(text="● REC", text_color="#e74c3c")
         else:
-            self.record_indicator.config(text="")
+            self.record_indicator.configure(text="")
         self.root.after(500, self._update_status)
 
     def toggle_pause(self):
         self.paused = not self.paused
-        self.pause_button.config(text="Reanudar" if self.paused else "Pausar")
+        self.pause_button.configure(text="▶ Reanudar" if self.paused else "⏸ Pausar")
+
+    def clear_data(self):
+        for sensor in self.sensors.values():
+            sensor["values"].clear()
+            sensor["times"].clear()
+        for line in self.lines.values():
+            line.set_data([], [])
+        self.axis.relim()
+        self.axis.autoscale_view()
+        self.canvas.draw_idle()
 
     def toggle_recording(self):
         self.recording = not self.recording
@@ -488,10 +638,10 @@ class ArduinoMonitor:
                 sensor["all_times"].clear()
                 sensor["min"] = None
                 sensor["max"] = None
-            self.record_button.config(text="Detener captura")
+            self.record_button.configure(text="■ Detener captura", fg_color="#c0392b", hover_color="#e74c3c")
             self.log("Captura iniciada")
         else:
-            self.record_button.config(text="Iniciar captura")
+            self.record_button.configure(text="▶ Iniciar captura", fg_color="#27ae60", hover_color="#2ecc71")
             self.log("Captura detenida")
 
     def tare(self, name):
@@ -499,11 +649,11 @@ class ArduinoMonitor:
         if not sensor["tared"] and sensor["values"]:
             sensor["offset"] += sensor["values"][-1]
             sensor["tared"] = True
-            self.tare_buttons[name].config(text="Restaurar")
+            self.tare_buttons[name].configure(text="Restaurar")
         else:
             sensor["offset"] = 0.0
             sensor["tared"] = False
-            self.tare_buttons[name].config(text="Poner a 0")
+            self.tare_buttons[name].configure(text="Poner a 0")
 
     def set_range(self, name):
         try:
@@ -611,7 +761,9 @@ class ArduinoMonitor:
 
 
 def main():
-    root = tk.Tk()
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("blue")
+    root = ctk.CTk()
     ArduinoMonitor(root)
     root.mainloop()
 
