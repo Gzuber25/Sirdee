@@ -2182,6 +2182,8 @@ class MainWindow(ctk.CTk):
                 if card.is_enabled():
                     self._set_sensor_enabled(index, True)
 
+            self._start_monitoring()
+
         else:
 
             messagebox.showerror(
