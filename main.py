@@ -215,7 +215,7 @@ class SerialManager:
         self._serial: Optional[serial.Serial] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._data_queue: "Queue[Tuple[List[Optional[float]], bool]]" = Queue(maxsize=200)
+        self._data_queue: "Queue[str]" = Queue(maxsize=500)
         self._connected = False
         self._on_disconnect: Optional[Callable[[], None]] = None
 
@@ -277,13 +277,21 @@ class SerialManager:
 
     def read_data(self) -> Optional[List[float]]:
         try:
-            values, _ = self._data_queue.get_nowait()
-            return values
+            line = self._data_queue.get_nowait()
+            parsed = self._parse_line(line)
+            return parsed[0] if parsed else None
         except Empty:
             return None
 
     def read_data_with_format(self) -> Optional[Tuple[List[Optional[float]], bool]]:
-        """Returns values and whether they came from the PotN firmware format."""
+        """Returns the next parsed sensor line."""
+        try:
+            line = self._data_queue.get_nowait()
+            return self._parse_line(line)
+        except Empty:
+            return None
+
+    def read_line(self) -> Optional[str]:
         try:
             return self._data_queue.get_nowait()
         except Empty:
@@ -325,20 +333,13 @@ class SerialManager:
                 if not line:
                     continue
 
-                parsed = self._parse_line(line)
-
-                if parsed is None:
-                    continue
-
-                values, is_pot_format = parsed
-
                 if self._data_queue.full():
                     try:
                         self._data_queue.get_nowait()
                     except Empty:
                         pass
 
-                self._data_queue.put_nowait((values, is_pot_format))
+                self._data_queue.put_nowait(line)
 
             except serial.SerialException as exc:
                 print(f"[Serial] Conexión perdida: {exc}")
@@ -362,7 +363,7 @@ class SerialManager:
         line: str
     ) -> Optional[Tuple[List[Optional[float]], bool]]:
         try:
-            if ":" in line:
+            if line.strip().startswith("Pot"):
                 values = [None] * self.num_sensors
                 for part in line.replace("|", ",").split(","):
                     name, value = part.split(":", 1)
@@ -2323,25 +2324,25 @@ class MainWindow(ctk.CTk):
 
         if self.monitoring:
 
-            latest = None
+            processed_data = False
 
             while True:
 
-                data = self.serial.read_data_with_format()
+                line = self.serial.read_line()
 
-                if data is None:
+                if line is None:
                     break
 
-                latest = data
-
-            if latest is not None:
+                parsed = self.serial._parse_line(line)
+                if parsed is None:
+                    continue
 
                 ts = (
                     time.time()
                     - self.start_time
                 )
 
-                raw_values, is_pot_format = latest
+                raw_values, is_pot_format = parsed
 
                 results = self.processor.process(
                     raw_values,
@@ -2353,8 +2354,10 @@ class MainWindow(ctk.CTk):
                     results
                 )
 
-                if not self.graph_paused:
-                    self._update_graph()
+                processed_data = True
+
+            if processed_data and not self.graph_paused:
+                self._update_graph()
 
         self.after(
             REFRESH_MS,
