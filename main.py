@@ -1,134 +1,24 @@
 """Monitor serial de cinco transductores Arduino."""
 
-import csv
-import os
 import platform
-import queue
-import tempfile
-import threading
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 
 import customtkinter as ctk
-import serial
-import serial.tools.list_ports
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.ticker import FormatStrFormatter
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import cm
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from sirdee.constants import HISTORY_SIZE, NUM_SENSORS, PLOT_MS, POLL_MS, SENSOR_COLORS
+from sirdee.reports import export_csv as write_csv
+from sirdee.reports import export_pdf as write_pdf
+from sirdee.sensors import parse_sensor_line, sensor_state
+from sirdee.serial_reader import SerialReader
 
-NUM_SENSORS = 5
-BAUDRATE = 9600
-POLL_MS = 50
-PLOT_MS = 100
-HISTORY_SIZE = 500
-COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
-
-
-class SerialReader:
-    """Reads complete serial lines in a worker and never touches Tk widgets."""
-
-    def __init__(self):
-        self.connection = None
-        self.thread = None
-        self.stop_event = threading.Event()
-        self.lines = queue.Queue(maxsize=1000)
-        self.connected = False
-
-    def ports(self):
-        return [item.device for item in serial.tools.list_ports.comports()]
-
-    def connect(self, port):
-        try:
-            self.connection = serial.Serial(port, BAUDRATE, timeout=1)
-            time.sleep(2)
-            self.stop_event.clear()
-            self.connected = True
-            self.thread = threading.Thread(target=self._read_loop, daemon=True)
-            self.thread.start()
-            return True
-        except serial.SerialException as exc:
-            print(f"Error al conectar: {exc}")
-            self.connection = None
-            self.connected = False
-            return False
-
-    def disconnect(self):
-        self.stop_event.set()
-        self.connected = False
-        if self.connection is not None:
-            try:
-                self.connection.close()
-            except Exception:
-                pass
-        self.connection = None
-        self.thread = None
-
-    def send(self, command):
-        if not self.connected or self.connection is None or not self.connection.is_open:
-            return False
-        try:
-            payload = f"{command.rstrip(chr(10))}\n".encode("utf-8", errors="ignore")
-            self.connection.write(payload)
-            return True
-        except (serial.SerialException, OSError) as exc:
-            print(f"Error enviando comando: {exc}")
-            return False
-
-    def get_line(self):
-        try:
-            return self.lines.get_nowait()
-        except queue.Empty:
-            return None
-
-    def _parse_line(self, line):
-        if not line.strip().startswith("Pot"):
-            return None
-        values = [None] * NUM_SENSORS
-        for part in line.replace("|", ",").split(","):
-            if ":" not in part:
-                continue
-            name, value_text = [item.strip() for item in part.split(":", 1)]
-            if not name.startswith("Pot"):
-                continue
-            try:
-                index = int(name[3:]) - 1
-                if 0 <= index < NUM_SENSORS:
-                    values[index] = float(value_text)
-            except ValueError:
-                continue
-        return (values, True) if any(value is not None for value in values) else None
-
-    def _read_loop(self):
-        while not self.stop_event.is_set():
-            try:
-                if self.connection is None or not self.connection.is_open:
-                    break
-                line = self.connection.readline().decode("utf-8", errors="ignore").strip()
-                if not line:
-                    continue
-                if self.lines.full():
-                    try:
-                        self.lines.get_nowait()
-                    except queue.Empty:
-                        pass
-                self.lines.put_nowait(line)
-            except (serial.SerialException, OSError) as exc:
-                print(f"Conexion perdida: {exc}")
-                break
-            except Exception as exc:
-                print(f"Error leyendo serial: {exc}")
-                time.sleep(0.05)
-        self.connected = False
+COLORS = SENSOR_COLORS
 
 
 class ArduinoMonitor:
@@ -352,137 +242,6 @@ class ArduinoMonitor:
         self.range_entries[name] = entry
         ctk.CTkButton(range_row, text="Set", width=50, height=28, command=lambda sensor=name: self.set_range(sensor)).pack(side="left", padx=2)
 
-    def _build_ui(self):
-        style = ttk.Style()
-        if "clam" in style.theme_names():
-            style.theme_use("clam")
-        self.font_normal = ("TkDefaultFont", 12)
-        self.font_bold = ("TkDefaultFont", 12, "bold")
-        self.font_large = ("TkDefaultFont", 20, "bold")
-        self.font_small = ("TkDefaultFont", 10)
-        style.configure("TButton", padding=(10, 8), font=self.font_bold)
-        style.configure("Small.TButton", padding=(8, 5), font=self.font_small)
-        style.configure("Connect.TButton", background="#2ecc71", foreground="white")
-        style.configure("Disconnect.TButton", background="#e74c3c", foreground="white")
-        style.configure("Action.TButton", background="#3498db", foreground="white")
-        style.configure("Record.TButton", background="#2ecc71", foreground="white")
-        style.configure("Report.TButton", background="#9b59b6", foreground="white")
-
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=0)
-
-        main = tk.Frame(self.root, bg="#ecf0f1")
-        main.grid(row=0, column=0, sticky="nsew")
-        main.columnconfigure(1, weight=1)
-        main.rowconfigure(1, weight=1)
-
-        connection = tk.Frame(main, bg="#34495e", height=58)
-        connection.grid(row=0, column=0, columnspan=2, sticky="ew")
-        connection.grid_propagate(False)
-        connection.columnconfigure(4, weight=1)
-        tk.Label(connection, text="Puerto:", font=self.font_normal, fg="white", bg="#34495e").grid(row=0, column=0, padx=(10, 4), pady=8)
-        self.port_combo = ttk.Combobox(connection, width=14, state="readonly", font=self.font_normal)
-        self.port_combo.grid(row=0, column=1, padx=4, pady=8)
-        ttk.Button(connection, text="Actualizar", command=self.refresh_ports, style="Small.TButton").grid(row=0, column=2, padx=4, pady=8)
-        self.connect_button = ttk.Button(connection, text="Conectar", command=self.toggle_connection, style="Connect.TButton")
-        self.connect_button.grid(row=0, column=3, padx=4, pady=8)
-
-        sensor_panel = tk.Frame(main, bg="#ecf0f1", width=440)
-        sensor_panel.grid(row=1, column=0, sticky="ns")
-        sensor_panel.grid_propagate(False)
-        sensor_panel.columnconfigure(0, weight=1)
-        for index in range(NUM_SENSORS):
-            self._build_sensor_card(sensor_panel, index)
-
-        actions = tk.Frame(sensor_panel, bg="#ecf0f1")
-        actions.grid(row=NUM_SENSORS, column=0, sticky="ew", padx=6, pady=8)
-        actions.columnconfigure(0, weight=1)
-        actions.columnconfigure(1, weight=1)
-        ttk.Button(actions, text="Calibracion", command=self.calibration, style="Action.TButton").grid(row=0, column=0, sticky="ew", padx=3)
-        ttk.Button(actions, text="Guardar CSV", command=self.export_csv, style="Report.TButton").grid(row=0, column=1, sticky="ew", padx=3)
-        ttk.Button(actions, text="Guardar PDF", command=self.export_pdf, style="Report.TButton").grid(row=1, column=0, columnspan=2, sticky="ew", padx=3, pady=5)
-
-        graph_box = tk.LabelFrame(main, text="Monitoreo de Transductores", bg="#ffffff", padx=5, pady=5)
-        graph_box.grid(row=1, column=1, sticky="nsew", padx=(6, 8), pady=6)
-        graph_box.rowconfigure(0, weight=1)
-        graph_box.columnconfigure(0, weight=1)
-
-        self.figure = Figure(figsize=(12, 5), dpi=90)
-        self.axis = self.figure.add_subplot(111)
-        self.axis.set_xlabel("Tiempo (s)")
-        self.axis.set_ylabel("Valor (mm)")
-        self.axis.grid(True, alpha=0.35, linestyle="--")
-        self.axis.yaxis.set_major_formatter(FormatStrFormatter("%.4f"))
-        for index in range(1, NUM_SENSORS + 1):
-            line, = self.axis.plot([], [], color=COLORS[index - 1], linewidth=2, label=f"Sensor {index}")
-            self.lines[f"Pot{index}"] = line
-        self.axis.legend(loc="upper left", ncol=NUM_SENSORS, fontsize=9)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=graph_box)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-
-        bottom = tk.Frame(main, bg="#34495e", height=58)
-        bottom.grid(row=2, column=0, columnspan=2, sticky="ew")
-        bottom.grid_propagate(False)
-        bottom.columnconfigure(1, weight=1)
-        self.record_indicator = tk.Label(bottom, text="", font=self.font_bold, fg="#ecf0f1", bg="#34495e")
-        self.record_indicator.grid(row=0, column=0, padx=10, pady=8)
-        self.port_label = tk.Label(bottom, text="Sin conexion", font=self.font_small, fg="#ecf0f1", bg="#34495e")
-        self.port_label.grid(row=0, column=1, sticky="w", padx=8)
-        self.pause_button = ttk.Button(bottom, text="Pausar", command=self.toggle_pause, style="Action.TButton", state="disabled")
-        self.pause_button.grid(row=0, column=2, padx=4, pady=6)
-        self.record_button = ttk.Button(bottom, text="Iniciar captura", command=self.toggle_recording, style="Record.TButton", state="disabled")
-        self.record_button.grid(row=0, column=3, padx=4, pady=6)
-
-        self.status_frame = tk.Frame(self.root, bg="#2c3e50", height=32)
-        self.status_frame.grid(row=1, column=0, sticky="ew")
-        self.status_frame.grid_propagate(False)
-        self.status_connection = tk.Label(self.status_frame, text="● Desconectado", font=self.font_small, fg="#e74c3c", bg="#2c3e50")
-        self.status_connection.pack(side="left", padx=10)
-        self.status_samples = tk.Label(self.status_frame, text="", font=self.font_small, fg="white", bg="#2c3e50")
-        self.status_samples.pack(side="left", padx=10)
-        self.status_minmax = tk.Label(self.status_frame, text="", font=self.font_small, fg="white", bg="#2c3e50")
-        self.status_minmax.pack(side="right", padx=10)
-
-    def _build_sensor_card(self, parent, index):
-        number = index + 1
-        name = f"Pot{number}"
-        card = tk.Frame(parent, bg=COLORS[index], padx=8, pady=5)
-        card.grid(row=index, column=0, sticky="ew", padx=5, pady=3)
-        card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, weight=1)
-
-        variable = tk.BooleanVar(value=False)
-        self.vars[name] = variable
-        check = tk.Checkbutton(
-            card,
-            text=f"S{number}",
-            variable=variable,
-            command=lambda sensor=name: self.toggle_sensor(sensor),
-            bg=COLORS[index],
-            fg="white",
-            selectcolor=COLORS[index],
-            activebackground=COLORS[index],
-            activeforeground="white",
-            font=self.font_large,
-        )
-        check.grid(row=0, column=0, padx=(4, 8), sticky="w")
-
-        label = tk.Label(card, text="---.---", bg=COLORS[index], fg="white", font=self.font_large, anchor="e")
-        label.grid(row=0, column=1, padx=6, sticky="ew")
-        self.value_labels[name] = label
-
-        tare = ttk.Button(card, text="Poner a 0", style="Small.TButton", command=lambda sensor=name: self.tare(sensor))
-        tare.grid(row=1, column=0, padx=2, pady=4, sticky="ew")
-        self.tare_buttons[name] = tare
-
-        entry = ttk.Entry(card, width=8, justify="center")
-        entry.insert(0, "25.0")
-        entry.grid(row=1, column=1, padx=2, pady=4, sticky="ew")
-        self.range_entries[name] = entry
-        ttk.Button(card, text="Set", style="Small.TButton", command=lambda sensor=name: self.set_range(sensor)).grid(row=2, column=0, columnspan=2, sticky="ew")
-
     def refresh_ports(self):
         ports = self.serial.ports()
         values = ports or ["--"]
@@ -565,16 +324,13 @@ class ArduinoMonitor:
         self.root.after(POLL_MS, self._poll_serial)
 
     def process_data(self, line):
-        for part in line.replace("|", ",").split(","):
-            if ":" not in part:
+        values = parse_sensor_line(line, NUM_SENSORS)
+        if values is None:
+            return
+        for index, raw in enumerate(values):
+            if raw is None:
                 continue
-            name, value_text = [item.strip() for item in part.split(":", 1)]
-            if name not in self.sensors:
-                continue
-            try:
-                raw = float(value_text)
-            except ValueError:
-                continue
+            name = f"Pot{index + 1}"
             sensor = self.sensors[name]
             value = sensor["range"] - raw - sensor["offset"]
             now = time.time() - self.start_time
@@ -591,12 +347,9 @@ class ArduinoMonitor:
 
     @staticmethod
     def _sensor_state(value, maximum):
-        if value < 0 or value > maximum:
-            return "🔴 Fuera de rango", "#e74c3c"
-        margin = maximum * 0.10
-        if value < margin or value > maximum - margin:
-            return "🟡 Advertencia", "#f1c40f"
-        return "🟢 Normal", "#2ecc71"
+        state, color = sensor_state(value, maximum)
+        prefix = {"Normal": "🟢", "Advertencia": "🟡", "Fuera de rango": "🔴"}[state]
+        return f"{prefix} {state}", color
 
     def process_range_message(self, line):
         if "Rango=" not in line and "Rango T" not in line:
@@ -756,19 +509,7 @@ class ArduinoMonitor:
             messagebox.showwarning("CSV", "Activa al menos un sensor.")
             return
         try:
-            with open(Path(path), "w", newline="", encoding="utf-8") as output:
-                writer = csv.writer(output)
-                writer.writerow(["Tiempo (s)"] + [name.replace("Pot", "Sensor ") for name in enabled])
-                length = max(len(self.sensors[name]["all_values"]) for name in enabled)
-                for row_index in range(length):
-                    first = self.sensors[enabled[0]]
-                    if row_index >= len(first["all_times"]):
-                        continue
-                    row = [f"{first['all_times'][row_index]:.4f}"]
-                    for name in enabled:
-                        values = self.sensors[name]["all_values"]
-                        row.append(f"{values[row_index]:.4f}" if row_index < len(values) else "")
-                    writer.writerow(row)
+            write_csv(Path(path), self.sensors)
             messagebox.showinfo("CSV", "Datos exportados correctamente.")
         except OSError as exc:
             messagebox.showerror("CSV", str(exc))
@@ -781,28 +522,11 @@ class ArduinoMonitor:
         if not enabled:
             messagebox.showwarning("PDF", "No hay datos grabados.")
             return
-        image_path = None
         try:
-            image_path = os.path.join(tempfile.gettempdir(), "arduino_monitor_chart.png")
-            self.figure.savefig(image_path, dpi=120, bbox_inches="tight")
-            rows = [["Sensor", "Actual", "Min", "Max", "Muestras"]]
-            for name in enabled:
-                sensor = self.sensors[name]
-                rows.append([name.replace("Pot", "Sensor "), f"{sensor['all_values'][-1]:.4f}", f"{min(sensor['all_values']):.4f}", f"{max(sensor['all_values']):.4f}", str(len(sensor['all_values']))])
-            doc = SimpleDocTemplate(path, pagesize=A4)
-            table = Table(rows)
-            table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#34495e")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("ALIGN", (0, 0), (-1, -1), "CENTER")]))
-            story = [Paragraph("Reporte de Transductores", getSampleStyleSheet()["Title"]), Spacer(1, 12), table, Spacer(1, 12), Image(image_path, width=16 * cm, height=8 * cm)]
-            doc.build(story)
+            write_pdf(Path(path), self.figure, self.sensors)
             messagebox.showinfo("PDF", "Reporte generado correctamente.")
         except Exception as exc:
             messagebox.showerror("PDF", str(exc))
-        finally:
-            if image_path and os.path.exists(image_path):
-                try:
-                    os.remove(image_path)
-                except OSError:
-                    pass
 
     def close(self):
         self.serial.disconnect()

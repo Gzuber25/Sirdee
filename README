@@ -1,3 +1,50 @@
+# Sirdee Arduino Monitor
+
+Desktop monitor for five Arduino transducers. The application keeps the existing CustomTkinter screen and serial commands while separating hardware access, parsing, reporting, and tests.
+
+## Project layout
+
+- `main.py`: application entry point and UI.
+- `sirdee/serial_reader.py`: threaded serial connection and queue.
+- `sirdee/sensors.py`: serial frame parsing and sensor state classification.
+- `sirdee/reports.py`: CSV and PDF exports.
+- `sirdee/constants.py`: shared timing, sensor, and display constants.
+- `tests/`: headless regression tests that run without an Arduino or display.
+- `start.sh`: Linux-only Raspberry Pi launcher.
+
+## Windows 11 development
+
+Use Python 3.11 or newer, create a virtual environment, and install the dependencies:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python main.py
+```
+
+Connect an Arduino over USB and select the port shown in the application. Windows normally exposes it as `COM3`, `COM4`, or similar.
+
+## Raspberry Pi Debian Trixie
+
+From the project directory:
+
+```bash
+python3 -m venv venv
+./venv/bin/python -m pip install -r requirements.txt
+./start.sh
+```
+
+`start.sh` is intentionally Linux-only and resolves its own directory, so it can be started from a desktop shortcut or another working directory. The Python application itself is shared by Windows and Linux.
+
+## Arduino serial format
+
+The reader accepts the current format, including partial frames:
+
+```text
+Pot1: 25.43|Pot2: 24.91,Pot3: 25.12,Pot4: 25.30,Pot5: 24.88
+```
 python3 -m venv venv
 
 venv\Scripts\Activate.ps1
