@@ -85,7 +85,7 @@ class ArduinoMonitor:
     def _build_custom_ui(self):
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
-        ctk.set_widget_scaling(1.15)
+        ctk.set_widget_scaling(1.3)
 
         self.root.configure(fg_color="#f2f4f7")
         self.root.columnconfigure(0, weight=1)
@@ -95,11 +95,22 @@ class ArduinoMonitor:
         self.toolbar.grid(row=0, column=0, sticky="ew")
         self.toolbar.grid_propagate(False)
 
+        ctk.CTkButton(
+            self.toolbar,
+            text="✕ Cerrar",
+            width=88,
+            height=34,
+            fg_color="#c0392b",
+            hover_color="#e74c3c",
+            font=("Segoe UI", 14, "bold"),
+            command=self.close,
+        ).pack(side="left", padx=7)
+
         self.start_monitor_button = ctk.CTkButton(
             self.toolbar,
             text="▶ Iniciar monitoreo",
-            width=190,
-            height=42,
+            width=152,
+            height=34,
             fg_color="#27ae60",
             hover_color="#2ecc71",
             font=("Segoe UI", 14, "bold"),
@@ -111,8 +122,8 @@ class ArduinoMonitor:
         self.stop_monitor_button = ctk.CTkButton(
             self.toolbar,
             text="■ Detener",
-            width=130,
-            height=42,
+            width=104,
+            height=34,
             fg_color="#c0392b",
             hover_color="#e74c3c",
             font=("Segoe UI", 14, "bold"),
@@ -124,8 +135,8 @@ class ArduinoMonitor:
         self.connect_button = ctk.CTkButton(
             self.toolbar,
             text="🔌 Conectar",
-            width=155,
-            height=42,
+            width=124,
+            height=34,
             fg_color="#2f6fad",
             hover_color="#3f82c1",
             font=("Segoe UI", 14, "bold"),
@@ -151,8 +162,8 @@ class ArduinoMonitor:
         ctk.CTkButton(
             self.toolbar,
             text="↻",
-            width=44,
-            height=40,
+            width=36,
+            height=32,
             fg_color="#dce3eb",
             hover_color="#cbd5df",
             text_color="#1f2937",
@@ -179,9 +190,9 @@ class ArduinoMonitor:
         title_bar = ctk.CTkFrame(graph, fg_color="transparent")
         title_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 0))
         ctk.CTkLabel(title_bar, text="📈 MONITOREO EN TIEMPO REAL", font=("Segoe UI", 17, "bold"), text_color="#1f2937").pack(side="left")
-        self.pause_button = ctk.CTkButton(title_bar, text="⏸ Pausar", width=120, height=34, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.toggle_pause)
+        self.pause_button = ctk.CTkButton(title_bar, text="⏸ Pausar", width=96, height=28, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.toggle_pause)
         self.pause_button.pack(side="right", padx=4)
-        ctk.CTkButton(title_bar, text="🧹 Limpiar", width=120, height=34, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.clear_data).pack(side="right", padx=4)
+        ctk.CTkButton(title_bar, text="🧹 Limpiar", width=96, height=28, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=self.clear_data).pack(side="right", padx=4)
 
         self.figure = Figure(figsize=(12, 4), dpi=100)
         self.axis = self.figure.add_subplot(111)
@@ -204,10 +215,10 @@ class ArduinoMonitor:
         self.record_indicator.pack(side="left", padx=18)
         self.port_label = ctk.CTkLabel(self.footer, text="Sin conexión", font=("Segoe UI", 12), text_color="#5b6470")
         self.port_label.pack(side="left", padx=8)
-        ctk.CTkButton(self.footer, text="🎯 Calibrar", width=160, height=44, fg_color="#8e44ad", hover_color="#9b59b6", command=self.calibration).pack(side="right", padx=7, pady=15)
-        ctk.CTkButton(self.footer, text="📄 PDF", width=140, height=44, fg_color="#16a085", hover_color="#1abc9c", command=self.export_pdf).pack(side="right", padx=7, pady=15)
-        ctk.CTkButton(self.footer, text="💾 CSV", width=140, height=44, fg_color="#2f6fad", hover_color="#3f82c1", command=self.export_csv).pack(side="right", padx=7, pady=15)
-        self.record_button = ctk.CTkButton(self.footer, text="▶ Iniciar captura", width=180, height=44, fg_color="#27ae60", hover_color="#2ecc71", command=self.toggle_recording, state="disabled")
+        ctk.CTkButton(self.footer, text="🎯 Calibrar", width=128, height=36, fg_color="#8e44ad", hover_color="#9b59b6", command=self.calibration).pack(side="right", padx=7, pady=15)
+        ctk.CTkButton(self.footer, text="📄 PDF", width=112, height=36, fg_color="#16a085", hover_color="#1abc9c", command=self.export_pdf).pack(side="right", padx=7, pady=15)
+        ctk.CTkButton(self.footer, text="💾 CSV", width=112, height=36, fg_color="#2f6fad", hover_color="#3f82c1", command=self.export_csv).pack(side="right", padx=7, pady=15)
+        self.record_button = ctk.CTkButton(self.footer, text="▶ Iniciar captura", width=144, height=36, fg_color="#27ae60", hover_color="#2ecc71", command=self.toggle_recording, state="disabled")
         self.record_button.pack(side="right", padx=7, pady=15)
 
         self.status_connection = ctk.CTkLabel(self.root, text="● Desconectado", height=28, fg_color="#2c3e50", text_color="#e74c3c", anchor="w")
@@ -231,7 +242,7 @@ class ArduinoMonitor:
         state = ctk.CTkLabel(card, text="⚪ Sin datos", font=("Segoe UI", 15, "bold"), text_color="#95a5a6")
         state.pack(pady=(0, 12))
         self.state_labels[name] = state
-        tare = ctk.CTkButton(card, text="Tara / 0", width=110, height=34, font=("Segoe UI", 13), corner_radius=8, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=lambda sensor=name: self.tare(sensor))
+        tare = ctk.CTkButton(card, text="Tara / 0", width=88, height=28, font=("Segoe UI", 13), corner_radius=8, fg_color="#dce3eb", hover_color="#cbd5df", text_color="#1f2937", command=lambda sensor=name: self.tare(sensor))
         tare.pack(pady=(0, 18))
         self.tare_buttons[name] = tare
         range_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -240,7 +251,7 @@ class ArduinoMonitor:
         entry.insert(0, "25.0")
         entry.pack(side="left", expand=True, padx=2)
         self.range_entries[name] = entry
-        ctk.CTkButton(range_row, text="Set", width=50, height=28, command=lambda sensor=name: self.set_range(sensor)).pack(side="left", padx=2)
+        ctk.CTkButton(range_row, text="Set", width=40, height=24, command=lambda sensor=name: self.set_range(sensor)).pack(side="left", padx=2)
 
     def refresh_ports(self):
         ports = self.serial.ports()
